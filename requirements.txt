@@ -1,0 +1,7 @@
+Flask==3.0.3
+requests==2.31.0
+twilio==9.0.1
+openai-whisper==20231117
+torch==2.2.2
+ffmpeg-python==0.2.0
+python-dotenv==1.0.1
