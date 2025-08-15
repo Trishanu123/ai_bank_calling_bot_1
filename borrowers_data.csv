@@ -1,6 +1,6 @@
-phone_number,name,loan_amount,pending_amount,last_due_date,took_loan,wants_reminder,reason,responded,loan_id
-+918910881616,Rajesh Kumar,25000,7500,2025-08-01,,,,,L1001
-+919876543210,Sunita Devi,30000,15000,2025-07-30,,,,,L1002
-+919112233445,Ramesh Yadav,20000,5000,2025-08-03,,,,,L1003
-+919998877665,Aarti Kumari,15000,3000,2025-08-02,,,,,L1004
-+918910881616,Mahesh Singh,10000,2000,2025-07-31,,,,,L1005
+reason,loan_amount,name,loan_id,last_due_date,phone_number,pending_amount,wants_reminder,responded,took_loan
+Will pay soon,25000,Rajesh Kumar,L1001,2025-08-01,+919059950107,7500,No,Yes,Yes
+,30000,Sunita Devi,L1002,2025-07-30,+919876543210,15000,,,
+,20000,Ramesh Yadav,L1003,2025-08-03,+919112233445,5000,,,
+,15000,Aarti Kumari,L1004,2025-08-02,+919998877665,3000,,,
+,10000,Mahesh Singh,L1005,2025-07-31,+918910881616,2000,,,

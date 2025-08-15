@@ -1,5 +1,6 @@
 import csv
 import os
+import re
 from flask import Flask, request, Response
 from datetime import datetime
 from twilio.twiml.voice_response import VoiceResponse
@@ -28,6 +29,23 @@ model = whisper.load_model("base")
 CSV_FILE = "borrowers_data.csv"
 conversation_state = {}
 
+# -------------------
+# Helper functions
+# -------------------
+def normalize_response(text):
+    """Clean transcription for easier matching."""
+    text = text.lower().strip()
+    text = re.sub(r'[^a-z\s]', '', text)  # remove punctuation/numbers
+    return text
+
+def is_yes(text):
+    yes_words = {"yes", "yeah", "yep", "yup", "ya", "sure", "absolutely", "correct", "right", "affirmative"}
+    return any(word in text.split() for word in yes_words)
+
+def is_no(text):
+    no_words = {"no", "nope", "nah", "not", "never", "negative"}
+    return any(word in text.split() for word in no_words)
+
 def load_borrower(phone_number):
     with open(CSV_FILE, newline='') as csvfile:
         reader = csv.DictReader(csvfile)
@@ -50,6 +68,9 @@ def update_csv(phone_number, updates):
         writer.writeheader()
         writer.writerows(rows)
 
+# -------------------
+# Voice Call Flow
+# -------------------
 @app.route("/voice", methods=['GET', 'POST'])
 def voice():
     call_sid = request.values.get("CallSid", "")
@@ -68,7 +89,7 @@ def voice():
         "chat_history": []
     }
 
-    intro = f"Namaste! This is a call from Bargaj Finance. I’m here to talk about your microfinance loan. May I speak with {borrower['name']}?"
+    intro = f"Namaste! This is a call from Bargaj Finance. I’m here to talk about your microfinance loan. Am I speaking to {borrower['name']}?"
 
     vr = VoiceResponse()
     vr.say(intro, voice="Polly.Aditi")
@@ -81,29 +102,42 @@ def process():
     borrower = conversation_state[call_sid]["borrower"]
     recording_url = request.form['RecordingUrl'] + '.mp3'
 
+    # Download and convert audio
     r = requests.get(recording_url, auth=(account_sid, auth_token))
     with open("input.mp3", "wb") as f:
         f.write(r.content)
     subprocess.run(["ffmpeg", "-y", "-i", "input.mp3", "-ar", "16000", "-ac", "1", "input.wav"])
+
+    # Transcribe
     result = model.transcribe("input.wav")
-    user_response = result["text"].strip().lower()
+    user_response = normalize_response(result["text"])
 
     step = conversation_state[call_sid]["step"]
     state = conversation_state[call_sid]
 
     vr = VoiceResponse()
 
+    # Step 0: Confirm identity
     if step == 0:
-        if "yes" in user_response:
-            vr.say(f"You have an active loan of ₹{borrower['loan_amount']} with a pending amount of ₹{borrower['pending_amount']}. Last due date was {borrower['last_due_date']}. Did you take this loan?", voice="Polly.Aditi")
+        if is_yes(user_response):
+            vr.say(
+                f"You have an active loan of ₹{borrower['loan_amount']} with a pending amount of ₹{borrower['pending_amount']}. "
+                f"Last due date was {borrower['last_due_date']}. Did you take this loan?",
+                voice="Polly.Aditi"
+            )
             state["step"] += 1
-        else:
+        elif is_no(user_response):
             vr.say("Alright, we’ll reach out another time. Goodbye.", voice="Polly.Aditi")
             update_csv(borrower['phone_number'], {"responded": "No"})
             return Response(str(vr), mimetype="text/xml")
+        else:
+            vr.say("Sorry, I didn’t get that. Could you please say yes or no?", voice="Polly.Aditi")
+        vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
+        return Response(str(vr), mimetype="text/xml")
 
+    # Step 1: Ask about taking loan
     elif step == 1:
-        if "yes" in user_response:
+        if is_yes(user_response):
             state["answers"]["took_loan"] = "Yes"
             gather = vr.gather(
                 input="dtmf",
@@ -122,11 +156,36 @@ def process():
             )
             state["step"] = 2  # Waiting for DTMF
             return Response(str(vr), mimetype="text/xml")
-
-        else:
+        elif is_no(user_response):
             state["answers"]["took_loan"] = "No"
             state["answers"]["reason"] = "Did not take loan"
-            vr.say("Did someone else use your documents, or could this be a mistake? Our support team will call you back. Goodbye.", voice="Polly.Aditi")
+            vr.say(
+                "Did someone else use your documents, or could this be a mistake? "
+                "Please say yes if you think it’s a mistake, or no if not.",
+                voice="Polly.Aditi"
+            )
+            state["step"] = "confirm_mistake"
+            vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
+            return Response(str(vr), mimetype="text/xml")
+        else:
+            vr.say("Sorry, I didn’t get that. Could you please say yes or no?", voice="Polly.Aditi")
+            vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
+            return Response(str(vr), mimetype="text/xml")
+
+    # Confirm mistake step
+    elif step == "confirm_mistake":
+        if is_yes(user_response):
+            vr.say("Our support team will investigate the issue. Goodbye.", voice="Polly.Aditi")
+            update_csv(
+                borrower['phone_number'],
+                {
+                    "took_loan": "No",
+                    "reason": "Possible identity misuse",
+                    "responded": "Yes"
+                }
+            )
+        elif is_no(user_response):
+            vr.say("Alright, we have recorded your response. Goodbye.", voice="Polly.Aditi")
             update_csv(
                 borrower['phone_number'],
                 {
@@ -135,10 +194,15 @@ def process():
                     "responded": "Yes"
                 }
             )
+        else:
+            vr.say("Sorry, I didn’t get that. Please say yes or no.", voice="Polly.Aditi")
+            vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
             return Response(str(vr), mimetype="text/xml")
+        return Response(str(vr), mimetype="text/xml")
 
+    # Step 3: After reason given
     elif step == 3:
-        if "remind" in user_response or "yes" in user_response:
+        if "remind" in user_response or is_yes(user_response):
             state["answers"]["wants_reminder"] = "Yes"
         elif "settlement" in user_response or "lower amount" in user_response:
             state["answers"]["settlement_requested"] = "Yes"
