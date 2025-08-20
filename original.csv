@@ -4,3 +4,13 @@ phone_number,name,loan_amount,pending_amount,last_due_date,took_loan,wants_remin
 +919112233445,Ramesh Yadav,20000,5000,2025-08-03,,,,,L1003
 +919998877665,Aarti Kumari,15000,3000,2025-08-02,,,,,L1004
 +918910881616,Mahesh Singh,10000,2000,2025-07-31,,,,,L1005
+
+
+
+,,+919059950107,No,2025-08-01,L1001,25000,,Sunita Devi,7500
+7500,,25000,Yes,Yes,Yes,Didn’t know EMI was due,2025-08-01,Rajesh Kumar,+919059950107,L1001
+25000,Yes,No,Ramesh Yadav,7500,+919059950107,2025-08-01,L1001,Possible identity misuse,
++919059950107,Yes,Aarti Kumari,7500,Yes,Collector didn’t come,Yes,L1001,25000,2025-08-01,
+No money,L1001,+919059950107,Mahesh Singh,Yes,Yes,,25000,2025-08-01,7500,Yes
+Yes,,Forgot,Yes,L1001,Rajesh Kumar,7500,2025-08-01,+919059950107,Yes,25000
+25000,Will pay soon,Yes,+919059950107,2025-08-01,No,,Yes,7500,Sunita Devi,L1001
