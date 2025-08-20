@@ -2,7 +2,6 @@ import csv
 import os
 import re
 from flask import Flask, request, Response
-from datetime import datetime
 from twilio.twiml.voice_response import VoiceResponse
 from twilio.rest import Client
 import whisper
@@ -33,9 +32,8 @@ conversation_state = {}
 # Helper functions
 # -------------------
 def normalize_response(text):
-    """Clean transcription for easier matching."""
     text = text.lower().strip()
-    text = re.sub(r'[^a-z\s]', '', text)  # remove punctuation/numbers
+    text = re.sub(r'[^a-z\s]', '', text)
     return text
 
 def is_yes(text):
@@ -69,6 +67,14 @@ def update_csv(phone_number, updates):
         writer.writerows(rows)
 
 # -------------------
+# Common Ending Function
+# -------------------
+def say_disclaimer_and_end(vr: VoiceResponse):
+    vr.say("Disclaimer: Non-payment of loans on time can affect your credit score and may lead to additional penalties as per company policy.", voice="Polly.Aditi")
+    vr.say("Goodbye.", voice="Polly.Aditi")
+    return Response(str(vr), mimetype="text/xml")
+
+# -------------------
 # Voice Call Flow
 # -------------------
 @app.route("/voice", methods=['GET', 'POST'])
@@ -80,7 +86,7 @@ def voice():
     if not borrower:
         vr = VoiceResponse()
         vr.say("We couldn't find your details. Goodbye.", voice="Polly.Aditi")
-        return Response(str(vr), mimetype="text/xml")
+        return say_disclaimer_and_end(vr)
 
     conversation_state[call_sid] = {
         "step": 0,
@@ -127,24 +133,19 @@ def process():
             )
             state["step"] += 1
         elif is_no(user_response):
-            vr.say("Alright, we’ll reach out another time. Goodbye.", voice="Polly.Aditi")
+            vr.say("Alright, we’ll reach out another time.", voice="Polly.Aditi")
             update_csv(borrower['phone_number'], {"responded": "No"})
-            return Response(str(vr), mimetype="text/xml")
+            return say_disclaimer_and_end(vr)
         else:
             vr.say("Sorry, I didn’t get that. Could you please say yes or no?", voice="Polly.Aditi")
         vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
         return Response(str(vr), mimetype="text/xml")
 
-    # Step 1: Ask about taking loan
+    # Step 1: Confirm loan
     elif step == 1:
         if is_yes(user_response):
             state["answers"]["took_loan"] = "Yes"
-            gather = vr.gather(
-                input="dtmf",
-                num_digits=1,
-                action="/handle_reason",
-                timeout=5
-            )
+            gather = vr.gather(input="dtmf", num_digits=1, action="/handle_reason", timeout=5)
             gather.say(
                 "Please select the reason why the last installment was not paid. "
                 "Press 1 if you didn’t know the EMI was due. "
@@ -154,7 +155,7 @@ def process():
                 "Press 5 if you will pay soon.",
                 voice="Polly.Aditi"
             )
-            state["step"] = 2  # Waiting for DTMF
+            state["step"] = 2
             return Response(str(vr), mimetype="text/xml")
         elif is_no(user_response):
             state["answers"]["took_loan"] = "No"
@@ -172,46 +173,39 @@ def process():
             vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
             return Response(str(vr), mimetype="text/xml")
 
-    # Confirm mistake step
+    # Confirm mistake
     elif step == "confirm_mistake":
         if is_yes(user_response):
-            vr.say("Our support team will investigate the issue. Goodbye.", voice="Polly.Aditi")
-            update_csv(
-                borrower['phone_number'],
-                {
-                    "took_loan": "No",
-                    "reason": "Possible identity misuse",
-                    "responded": "Yes"
-                }
-            )
+            vr.say("Our support team will investigate the issue.", voice="Polly.Aditi")
+            update_csv(borrower['phone_number'], {"took_loan": "No", "reason": "Possible identity misuse", "responded": "Yes"})
+            return say_disclaimer_and_end(vr)
         elif is_no(user_response):
-            vr.say("Alright, we have recorded your response. Goodbye.", voice="Polly.Aditi")
-            update_csv(
-                borrower['phone_number'],
-                {
-                    "took_loan": "No",
-                    "reason": "Did not take loan",
-                    "responded": "Yes"
-                }
-            )
+            vr.say("Alright, we have recorded your response.", voice="Polly.Aditi")
+            update_csv(borrower['phone_number'], {"took_loan": "No", "reason": "Did not take loan", "responded": "Yes"})
+            return say_disclaimer_and_end(vr)
         else:
             vr.say("Sorry, I didn’t get that. Please say yes or no.", voice="Polly.Aditi")
             vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
             return Response(str(vr), mimetype="text/xml")
-        return Response(str(vr), mimetype="text/xml")
 
-    # Step 3: After reason given
-    elif step == 3:
-        if "remind" in user_response or is_yes(user_response):
-            state["answers"]["wants_reminder"] = "Yes"
-        elif "settlement" in user_response or "lower amount" in user_response:
-            state["answers"]["settlement_requested"] = "Yes"
+    # Step 3+: Handling yes/no after reason follow-up
+    elif step in ["reason_followup"]:
+        reason = state["answers"].get("reason", "")
+        if is_yes(user_response):
+            vr.say("Reminder has been set.", voice="Polly.Aditi")
+            state["answers"]["reminder"] = "Yes"
+        elif is_no(user_response):
+            vr.say("Alright.", voice="Polly.Aditi")
+            state["answers"]["reminder"] = "No"
         else:
-            state["answers"]["wants_reminder"] = "No"
-
-        vr.say("Thank you for your time. Staying on track helps your credit score. Goodbye!", voice="Polly.Aditi")
+            vr.say("Sorry, I didn’t get that. Please say yes or no.", voice="Polly.Aditi")
+            vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
+            return Response(str(vr), mimetype="text/xml")
         update_csv(borrower['phone_number'], {**state["answers"], "responded": "Yes"})
-        return Response(str(vr), mimetype="text/xml")
+
+        # Always say consequences before ending final flow
+        vr.say("Please note: If the loan is not paid on time, it can affect your credit score and lead to penalties or legal action.", voice="Polly.Aditi")
+        return say_disclaimer_and_end(vr)
 
     vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
     return Response(str(vr), mimetype="text/xml")
@@ -233,12 +227,22 @@ def handle_reason():
 
     selected_reason = reasons.get(digits, "Unknown")
     state["answers"]["reason"] = selected_reason
-    state["step"] = 3
+    state["step"] = "reason_followup"
 
-    if digits == "3":  # Offer settlement
-        vr.say("We can help with a settlement option where you pay a lower amount. Would you like that?", voice="Polly.Aditi")
+    # Custom flows based on reason
+    if digits == "1":
+        vr.say("You didn’t know the EMI was due. Should I set a reminder?", voice="Polly.Aditi")
+    elif digits == "2":
+        vr.say("Sorry about that, the collector will come next Tuesday to take the money. Should I set a reminder?", voice="Polly.Aditi")
+    elif digits == "3":
+        vr.say("We can offer a settlement plan of 80 percent and send the collector next week. Should I set a reminder?", voice="Polly.Aditi")
+    elif digits == "4":
+        vr.say("You forgot. Do you want me to set a reminder for next week’s collection day?", voice="Polly.Aditi")
+    elif digits == "5":
+        vr.say("You will pay soon. Should I set a reminder for the next collection day?", voice="Polly.Aditi")
     else:
-        vr.say("Thank you. Should I set a reminder for your next payment?", voice="Polly.Aditi")
+        vr.say("Invalid option.", voice="Polly.Aditi")
+        return say_disclaimer_and_end(vr)
 
     vr.record(max_length=6, action="/process", recording_status_callback="/save", play_beep=True)
     return Response(str(vr), mimetype="text/xml")
